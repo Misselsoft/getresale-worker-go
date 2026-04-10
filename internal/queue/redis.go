@@ -38,8 +38,13 @@ func NewRedisManager(client *redis.Client, inputQueue, outputQueue string, worke
 
 func (m *RedisManager) ReceiveMessages(ctx context.Context) ([]Message, error) {
 	// Simple BLPop from the input list
+	queueName := m.InputQueue
+	if m.Prefix != "" {
+		queueName = fmt.Sprintf("%s:%s", m.Prefix, m.InputQueue)
+	}
+
 	// BLPop returns [key, value]
-	result, err := m.Client.BLPop(ctx, m.BlockTimeout, m.InputQueue).Result()
+	result, err := m.Client.BLPop(ctx, m.BlockTimeout, queueName).Result()
 	if err == redis.Nil {
 		return []Message{}, nil
 	}
@@ -63,8 +68,14 @@ func (m *RedisManager) SendResult(ctx context.Context, jobID string, result inte
 	if err != nil {
 		return err
 	}
+
+	queueName := m.OutputQueue
+	if m.Prefix != "" {
+		queueName = fmt.Sprintf("%s:%s", m.Prefix, m.OutputQueue)
+	}
+
 	// Simple RPush to the output list
-	return m.Client.RPush(ctx, m.OutputQueue, data).Err()
+	return m.Client.RPush(ctx, queueName, data).Err()
 }
 
 func (m *RedisManager) CompleteJob(ctx context.Context, jobID string, returnValue string) error {
@@ -89,12 +100,18 @@ func (m *RedisManager) FailJob(ctx context.Context, jobID string, reason string)
 
 func (m *RedisManager) FailJobWithBody(ctx context.Context, jobID string, body string, reason string) error {
 	failedQueue := m.InputQueue + ":failed"
+	if m.Prefix != "" {
+		failedQueue = fmt.Sprintf("%s:%s:failed", m.Prefix, m.InputQueue)
+	}
 	fmt.Printf("Job %s failed: %s. Moving to %s\n", jobID, reason, failedQueue)
 	return m.Client.RPush(ctx, failedQueue, body).Err()
 }
 
 func (m *RedisManager) RetryJob(ctx context.Context, jobID string, body string, delay time.Duration) error {
 	delayedQueue := m.InputQueue + ":delayed"
+	if m.Prefix != "" {
+		delayedQueue = fmt.Sprintf("%s:%s:delayed", m.Prefix, m.InputQueue)
+	}
 	// Use integer milliseconds for score to avoid floating point issues
 	score := float64(time.Now().Add(delay).UnixMilli())
 
@@ -109,6 +126,9 @@ func (m *RedisManager) RetryJob(ctx context.Context, jobID string, body string, 
 
 func (m *RedisManager) StartDelayedJobScheduler(ctx context.Context) {
 	delayedQueue := m.InputQueue + ":delayed"
+	if m.Prefix != "" {
+		delayedQueue = fmt.Sprintf("%s:%s:delayed", m.Prefix, m.InputQueue)
+	}
 	// Poll every 5 seconds instead of 1 to reduce load, or keep 1s for responsiveness
 	ticker := time.NewTicker(2 * time.Second)
 
@@ -153,7 +173,11 @@ func (m *RedisManager) StartDelayedJobScheduler(ctx context.Context) {
 						}
 
 						if removed > 0 {
-							if err := m.Client.RPush(ctx, m.InputQueue, jobBody).Err(); err != nil {
+							inputQueue := m.InputQueue
+							if m.Prefix != "" {
+								inputQueue = fmt.Sprintf("%s:%s", m.Prefix, m.InputQueue)
+							}
+							if err := m.Client.RPush(ctx, inputQueue, jobBody).Err(); err != nil {
 								fmt.Printf("Error pushing job back to input queue: %v\n", err)
 								// Try to add back to delayed queue to avoid data loss
 								m.Client.ZAdd(ctx, delayedQueue, redis.Z{
