@@ -188,7 +188,7 @@ type geminiErrorResponse struct {
 }
 
 type GeminiCachedContent struct {
-	Name        string          `json:"name"`
+	Name        string          `json:"name,omitempty"`
 	DisplayName string          `json:"displayName"`
 	Model       string          `json:"model"`
 	Contents    []GeminiContent `json:"contents"`
