@@ -63,6 +63,43 @@ func (m *RedisManager) ReceiveMessages(ctx context.Context) ([]Message, error) {
 	return []Message{{JobID: jobID, Body: payload}}, nil
 }
 
+func (m *RedisManager) PendingCount(ctx context.Context) (int64, error) {
+	queueName := m.InputQueue
+	if m.Prefix != "" {
+		queueName = fmt.Sprintf("%s:%s", m.Prefix, m.InputQueue)
+	}
+	return m.Client.LLen(ctx, queueName).Result()
+}
+
+// SkipPendingToBackup move os jobs atualmente pendentes na fila de entrada
+// para uma fila de backup (`<queue>:skipped`), sem apagá-los, para que não
+// sejam processados nesta execução.
+func (m *RedisManager) SkipPendingToBackup(ctx context.Context) (int64, error) {
+	queueName := m.InputQueue
+	backupQueue := m.InputQueue + ":skipped"
+	if m.Prefix != "" {
+		queueName = fmt.Sprintf("%s:%s", m.Prefix, m.InputQueue)
+		backupQueue = fmt.Sprintf("%s:%s:skipped", m.Prefix, m.InputQueue)
+	}
+
+	count, err := m.Client.LLen(ctx, queueName).Result()
+	if err != nil || count == 0 {
+		return 0, err
+	}
+
+	var moved int64
+	for i := int64(0); i < count; i++ {
+		if err := m.Client.RPopLPush(ctx, queueName, backupQueue).Err(); err != nil {
+			if err == redis.Nil {
+				break
+			}
+			return moved, err
+		}
+		moved++
+	}
+	return moved, nil
+}
+
 func (m *RedisManager) SendResult(ctx context.Context, jobID string, result interface{}) error {
 	data, err := json.Marshal(result)
 	if err != nil {
